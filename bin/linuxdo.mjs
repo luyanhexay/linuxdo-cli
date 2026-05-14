@@ -7,6 +7,8 @@ import { URL } from 'node:url';
 function printUsage() {
   console.log(`linuxdo usage:
   linuxdo set-curl --from-file ./request.curl
+  linuxdo set-curl "curl 'https://linux.do/t/topic/123' -H 'cookie: ...' -H 'user-agent: ...'"
+  linuxdo set-curl --url https://linux.do/t/topic/123 -H 'cookie: ...' -H 'user-agent: ...'
   linuxdo get-topic 111903
   linuxdo get-comments 111903 --from 1 --limit 5
 
@@ -15,21 +17,52 @@ optional:
   --shape list|tree`);
 }
 
+function isInlineCurlOption(token) {
+  return token === '-H'
+    || token === '--header'
+    || token === '-b'
+    || token === '--cookie'
+    || token === '-A'
+    || token === '--user-agent'
+    || token === '-e'
+    || token === '--referer';
+}
+
 function parseArgs(argv) {
   const [command, ...rest] = argv;
   const options = {};
   const positionals = [];
+  const inlineCurlParts = [];
+
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i];
+
+    if (command === 'set-curl' && isInlineCurlOption(token)) {
+      const value = rest[i + 1] && !rest[i + 1].startsWith('--') ? rest[++i] : '';
+      inlineCurlParts.push(token);
+      if (value) {
+        inlineCurlParts.push(value);
+      }
+      continue;
+    }
+
+    if (command === 'set-curl' && token === '--url') {
+      const value = rest[i + 1] && !rest[i + 1].startsWith('--') ? rest[++i] : 'true';
+      options.url = value;
+      continue;
+    }
+
     if (!token.startsWith('--')) {
       positionals.push(token);
       continue;
     }
+
     const key = token.slice(2);
     const value = rest[i + 1] && !rest[i + 1].startsWith('--') ? rest[++i] : 'true';
     options[key] = value;
   }
-  return { command, options, positionals };
+
+  return { command, options, positionals, inlineCurlParts };
 }
 
 function getStatePath(customPath) {
@@ -127,17 +160,16 @@ function parseHeaderValue(headerValue) {
   return [name, value];
 }
 
-function parseCurlText(curlText) {
-  const normalized = curlText.replace(/\\\r?\n/g, ' ').trim();
-  const tokens = shellSplit(normalized);
-  if (tokens.length === 0 || tokens[0] !== 'curl') {
-    throw new Error('Input must start with a curl command');
+function parseCurlTokens(tokens, defaults = {}) {
+  if (tokens.length === 0) {
+    throw new Error('Input is empty');
   }
 
+  const parseStart = tokens[0] === 'curl' ? 1 : 0;
   const headers = {};
-  let sourceUrl = '';
+  let sourceUrl = defaults.sourceUrl ?? '';
 
-  for (let i = 1; i < tokens.length; i += 1) {
+  for (let i = parseStart; i < tokens.length; i += 1) {
     const token = tokens[i];
 
     if ((token === '-H' || token === '--header') && i + 1 < tokens.length) {
@@ -174,7 +206,7 @@ function parseCurlText(curlText) {
   }
 
   if (!sourceUrl) {
-    throw new Error('Could not find a URL in the curl command');
+    throw new Error('Could not determine a source URL. Provide a full curl command, use --url, or reuse an existing saved source URL.');
   }
 
   return {
@@ -182,6 +214,47 @@ function parseCurlText(curlText) {
     headers,
     importedAt: new Date().toISOString(),
   };
+}
+
+function parseCurlText(curlText, defaults = {}) {
+  const normalized = curlText.replace(/\\\r?\n/g, ' ').trim();
+  return parseCurlTokens(shellSplit(normalized), defaults);
+}
+
+async function resolveExistingState(statePath) {
+  try {
+    return await loadState(statePath);
+  } catch {
+    return null;
+  }
+}
+
+async function buildStateFromSetCurlInput({ options, positionals, inlineCurlParts }) {
+  const statePath = getStatePath(options.state);
+  const existingState = await resolveExistingState(statePath);
+  const fallbackSourceUrl = options.url ?? existingState?.sourceUrl ?? '';
+
+  if (options['from-file']) {
+    const curlText = await readFile(resolve(options['from-file']), 'utf8');
+    return {
+      statePath,
+      state: parseCurlText(curlText, { sourceUrl: fallbackSourceUrl }),
+    };
+  }
+
+  const inlineText = [...positionals, ...inlineCurlParts].join(' ').trim();
+  const inlineTokens = [...positionals, ...inlineCurlParts].filter(Boolean);
+  if (inlineTokens.length > 0) {
+    const hasStructuredInlineFlags = inlineCurlParts.length > 0 || positionals.length > 1;
+    return {
+      statePath,
+      state: hasStructuredInlineFlags
+        ? parseCurlTokens(inlineTokens, { sourceUrl: fallbackSourceUrl })
+        : parseCurlText(inlineText, { sourceUrl: fallbackSourceUrl }),
+    };
+  }
+
+  throw new Error('set-curl requires --from-file or inline curl/header arguments');
 }
 
 function buildTopicUrl(sourceUrl, topicId) {
@@ -325,14 +398,8 @@ function normalizeComments(payload, options) {
   };
 }
 
-async function runSetCurl(options) {
-  if (!options['from-file']) {
-    throw new Error('set-curl requires --from-file');
-  }
-
-  const curlText = await readFile(resolve(options['from-file']), 'utf8');
-  const state = parseCurlText(curlText);
-  const statePath = getStatePath(options.state);
+async function runSetCurl(options, positionals, inlineCurlParts) {
+  const { statePath, state } = await buildStateFromSetCurlInput({ options, positionals, inlineCurlParts });
   await saveState(statePath, state);
 
   process.stdout.write(`${JSON.stringify({
@@ -380,14 +447,14 @@ async function runGetComments(options, positionals) {
 }
 
 async function main() {
-  const { command, options, positionals } = parseArgs(process.argv.slice(2));
+  const { command, options, positionals, inlineCurlParts } = parseArgs(process.argv.slice(2));
   if (!command || command === '--help' || command === 'help') {
     printUsage();
     return;
   }
 
   if (command === 'set-curl') {
-    await runSetCurl(options);
+    await runSetCurl(options, positionals, inlineCurlParts);
     return;
   }
 

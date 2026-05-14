@@ -41,10 +41,23 @@ npm install -g --prefix "$HOME/.local" git+https://github.com/luyanhexay/linuxdo
 
 ## Usage
 
-### 1. Import a browser curl
+### 1. Import or refresh a browser curl context
 
 ```bash
 linuxdo set-curl --from-file ./request.curl
+```
+
+You can also paste a full curl command directly:
+
+```bash
+linuxdo set-curl "curl 'https://linux.do/t/topic/1000000' -H 'cookie: ...' -H 'user-agent: ...'"
+```
+
+Or use header-only shorthand. In that form, everything before the first `-H` may be omitted **if** you also pass `--url` or already have a saved session whose `sourceUrl` can be reused:
+
+```bash
+linuxdo set-curl --url https://linux.do/t/topic/1000000 -H 'cookie: ...' -H 'user-agent: ...'
+linuxdo set-curl -H 'cookie: refreshed' -H 'user-agent: Mozilla/5.0'
 ```
 
 By default the request context is saved to:
@@ -113,6 +126,7 @@ linuxdo get-comments 1000000 --from 1 --limit 20 --shape tree
 
 - The CLI replays a browser-derived request context; it does not bypass Cloudflare on its own.
 - If the context expires, import a fresh browser `curl` with `set-curl` again.
+- Header-only `set-curl` shorthand reuses the previously saved `sourceUrl` unless you override it with `--url`.
 - Current comment retrieval slices the replies already present in the fetched topic JSON window; full cross-window expansion is not implemented yet.
 
 ## Repository layout
