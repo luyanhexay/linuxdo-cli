@@ -1,0 +1,5 @@
+curl 'http://127.0.0.1:40113/t/topic/111903' \
+  -H 'accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' \
+  -H 'cookie: bridge_token=ok' \
+  -H 'referer: http://127.0.0.1:40113/t/topic/111903' \
+  -H 'user-agent: Mozilla/5.0 Mock LinuxDo Bridge'

@@ -1,0 +1,36 @@
+{
+  "name": "linuxdo-cli",
+  "version": "0.1.0",
+  "description": "Minimal local-bin CLI for replaying a Linux.do browser curl context and fetching slim topic data.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "linuxdo": "./bin/linuxdo.mjs"
+  },
+  "files": [
+    "bin",
+    "mock",
+    "samples",
+    "README.md",
+    "LICENSE",
+    "OVERVIEW.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "linuxdo",
+    "discourse",
+    "cli",
+    "llm",
+    "curl"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourname/linuxdo-cli.git"
+  },
+  "homepage": "https://github.com/yourname/linuxdo-cli#readme",
+  "bugs": {
+    "url": "https://github.com/yourname/linuxdo-cli/issues"
+  }
+}
