@@ -1,8 +1,13 @@
 #!/usr/bin/env node
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { URL } from 'node:url';
+
+const execFile = promisify(execFileCallback);
+const TRANSPORTS = ['node-fetch', 'curl', 'python'];
 
 function printUsage() {
   console.log(`linuxdo usage:
@@ -271,42 +276,267 @@ function toPositiveInteger(value, fallback) {
 }
 
 async function fetchJson(target, headers) {
+  return fetchWithNodeFetch(target, headers);
+}
+
+function parseJsonText(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function buildFetchResult({ ok, status, url, contentType, bodyText, error, transport }) {
+  return {
+    ok,
+    status,
+    url,
+    contentType,
+    bodyText,
+    json: parseJsonText(bodyText),
+    error,
+    transport,
+  };
+}
+
+function summarizeAttempt(result) {
+  return {
+    transport: result.transport,
+    status: result.status,
+    contentType: result.contentType,
+    error: result.error || (result.ok ? '' : `HTTP ${result.status}`),
+  };
+}
+
+function chooseRepresentativeFailure(results) {
+  return results.reduce((best, current) => {
+    const bestScore = (best.json ? 1000 : 0) + (best.bodyText ? 100 : 0) + best.status;
+    const currentScore = (current.json ? 1000 : 0) + (current.bodyText ? 100 : 0) + current.status;
+    return currentScore >= bestScore ? current : best;
+  });
+}
+
+function buildAggregateFailure(target, attempts) {
+  const representative = chooseRepresentativeFailure(attempts);
+  return {
+    ok: false,
+    status: representative.status,
+    url: target,
+    contentType: representative.contentType,
+    bodyText: representative.bodyText,
+    json: representative.json,
+    error: 'All transports failed',
+    attempts: attempts.map(summarizeAttempt),
+  };
+}
+
+async function fetchWithNodeFetch(target, headers) {
   let response;
   try {
     response = await fetch(target, { headers });
   } catch (error) {
-    return {
+    return buildFetchResult({
       ok: false,
       status: 0,
       url: target,
       contentType: '',
       bodyText: '',
-      json: null,
       error: error instanceof Error ? error.message : String(error),
-    };
+      transport: 'node-fetch',
+    });
   }
 
   const text = await response.text();
-  let json = null;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = null;
-  }
-
-  return {
+  return buildFetchResult({
     ok: response.ok,
     status: response.status,
     url: target,
     contentType: response.headers.get('content-type') ?? '',
     bodyText: text,
-    json,
     error: '',
+    transport: 'node-fetch',
+  });
+}
+
+function parseCurlHeaderText(headerText) {
+  const normalized = headerText.replace(/\r/g, '');
+  const blocks = normalized
+    .split('\n\n')
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .filter((block) => block.startsWith('HTTP/'));
+  const finalBlock = blocks.at(-1) ?? '';
+  if (!finalBlock) {
+    return { status: 0, contentType: '' };
+  }
+
+  const lines = finalBlock.split('\n');
+  const statusLine = lines[0] ?? '';
+  const statusMatch = statusLine.match(/^HTTP\/\S+\s+(\d{3})/);
+  const contentTypeLine = lines.find((line) => line.toLowerCase().startsWith('content-type:')) ?? '';
+
+  return {
+    status: statusMatch ? Number.parseInt(statusMatch[1], 10) : 0,
+    contentType: contentTypeLine ? contentTypeLine.slice(contentTypeLine.indexOf(':') + 1).trim() : '',
   };
 }
 
+async function fetchWithCurl(target, headers) {
+  const tempDir = await mkdtemp(resolve(homedir(), '.tmp-linuxdo-curl-'));
+  const headerPath = resolve(tempDir, 'headers.txt');
+  const bodyPath = resolve(tempDir, 'body.txt');
+  const args = [
+    '--silent',
+    '--show-error',
+    '--location',
+    '--compressed',
+    '--dump-header', headerPath,
+    '--output', bodyPath,
+    target,
+  ];
+
+  for (const [name, value] of Object.entries(headers)) {
+    args.push('--header', `${name}: ${value}`);
+  }
+
+  try {
+    await execFile('curl', args, { maxBuffer: 10 * 1024 * 1024 });
+  } catch (error) {
+    await rm(tempDir, { recursive: true, force: true });
+    return buildFetchResult({
+      ok: false,
+      status: 0,
+      url: target,
+      contentType: '',
+      bodyText: '',
+      error: error instanceof Error ? error.message : String(error),
+      transport: 'curl',
+    });
+  }
+
+  try {
+    const [headerText, bodyText] = await Promise.all([
+      readFile(headerPath, 'utf8'),
+      readFile(bodyPath, 'utf8'),
+    ]);
+    const { status, contentType } = parseCurlHeaderText(headerText);
+    return buildFetchResult({
+      ok: status >= 200 && status < 300,
+      status,
+      url: target,
+      contentType,
+      bodyText,
+      error: '',
+      transport: 'curl',
+    });
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function fetchWithPython(target, headers) {
+  const script = [
+    'import json, sys, urllib.request, urllib.error',
+    'target = sys.argv[1]',
+    'headers = json.loads(sys.argv[2])',
+    'req = urllib.request.Request(target, headers=headers)',
+    'try:',
+    '    with urllib.request.urlopen(req, timeout=30) as resp:',
+    '        body = resp.read().decode("utf-8", "replace")',
+    '        print(json.dumps({',
+    '            "ok": 200 <= resp.status < 300,',
+    '            "status": resp.status,',
+    '            "url": target,',
+    '            "contentType": resp.headers.get("content-type", ""),',
+    '            "bodyText": body,',
+    '            "error": "",',
+    '            "transport": "python"',
+    '        }))',
+    'except urllib.error.HTTPError as exc:',
+    '    body = exc.read().decode("utf-8", "replace")',
+    '    print(json.dumps({',
+    '        "ok": False,',
+    '        "status": exc.code,',
+    '        "url": target,',
+    '        "contentType": exc.headers.get("content-type", ""),',
+    '        "bodyText": body,',
+    '        "error": str(exc),',
+    '        "transport": "python"',
+    '    }))',
+    'except Exception as exc:',
+    '    print(json.dumps({',
+    '        "ok": False,',
+    '        "status": 0,',
+    '        "url": target,',
+    '        "contentType": "",',
+    '        "bodyText": "",',
+    '        "error": str(exc),',
+    '        "transport": "python"',
+    '    }))',
+  ].join('\n');
+
+  let stdout;
+  try {
+    ({ stdout } = await execFile('python3', ['-c', script, target, JSON.stringify(headers)], {
+      maxBuffer: 10 * 1024 * 1024,
+    }));
+  } catch (error) {
+    return buildFetchResult({
+      ok: false,
+      status: 0,
+      url: target,
+      contentType: '',
+      bodyText: '',
+      error: error instanceof Error ? error.message : String(error),
+      transport: 'python',
+    });
+  }
+
+  const parsed = parseJsonText(stdout.trim());
+  if (!parsed || typeof parsed !== 'object') {
+    return buildFetchResult({
+      ok: false,
+      status: 0,
+      url: target,
+      contentType: '',
+      bodyText: '',
+      error: 'python transport returned invalid JSON envelope',
+      transport: 'python',
+    });
+  }
+
+  return buildFetchResult({
+    ok: Boolean(parsed.ok),
+    status: typeof parsed.status === 'number' ? parsed.status : 0,
+    url: typeof parsed.url === 'string' ? parsed.url : target,
+    contentType: typeof parsed.contentType === 'string' ? parsed.contentType : '',
+    bodyText: typeof parsed.bodyText === 'string' ? parsed.bodyText : '',
+    error: typeof parsed.error === 'string' ? parsed.error : '',
+    transport: 'python',
+  });
+}
+
+async function fetchJsonWithFallback(target, headers) {
+  const attempts = [];
+
+  for (const transport of TRANSPORTS) {
+    const result = transport === 'node-fetch'
+      ? await fetchWithNodeFetch(target, headers)
+      : transport === 'curl'
+        ? await fetchWithCurl(target, headers)
+        : await fetchWithPython(target, headers);
+    attempts.push(result);
+    if (result.ok && result.json) {
+      return result;
+    }
+  }
+
+  return buildAggregateFailure(target, attempts);
+}
+
 async function fetchTopicPayload(state, topicId) {
-  return fetchJson(buildTopicUrl(state.sourceUrl, topicId), state.headers);
+  return fetchJsonWithFallback(buildTopicUrl(state.sourceUrl, topicId), state.headers);
 }
 
 function normalizeTags(tags) {

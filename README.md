@@ -127,6 +127,8 @@ linuxdo get-comments 1000000 --from 1 --limit 20 --shape tree
 - The CLI replays a browser-derived request context; it does not bypass Cloudflare on its own.
 - If the context expires, import a fresh browser `curl` with `set-curl` again.
 - Header-only `set-curl` shorthand reuses the previously saved `sourceUrl` unless you override it with `--url`.
+- Topic fetches keep the same success output, but internally retry with Node `fetch`, system `curl`, and Python `urllib` before failing.
+- When every transport fails, the error output includes an `attempts` array so you can see which path failed and why.
 - Current comment retrieval slices the replies already present in the fetched topic JSON window; full cross-window expansion is not implemented yet.
 
 ## Repository layout

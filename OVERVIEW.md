@@ -1,6 +1,6 @@
 - **package.json**: Formal package manifest for GitHub/npm-style installation, bin wiring, engine constraints, and repository metadata. Open this when changing install behavior or preparing a tagged release.
-- **README.md**: User-facing install and usage guide for local-bin deployment from a clone or GitHub URL, including file-based and direct `set-curl` input modes. Open this when adjusting the public CLI contract or setup steps.
+- **README.md**: User-facing install and usage guide for local-bin deployment from a clone or GitHub URL, including file-based and direct `set-curl` input modes plus fallback-fetch behavior. Open this when adjusting the public CLI contract or setup steps.
 - **LICENSE**: Repository license for public distribution. Open this when changing publication terms.
-- **bin**: Executable entrypoint directory containing the `linuxdo` command implementation. Open this when changing commands, output contracts, direct `set-curl` parsing, or on-disk state handling.
+- **bin**: Executable entrypoint directory containing the `linuxdo` command implementation. Open this when changing commands, output contracts, direct `set-curl` parsing, multi-transport topic fetch fallback, or on-disk state handling.
 - **mock**: Local smoke-test fixtures, including a mock upstream and a reusable curl artifact. Open this when validating the CLI without touching the real Linux.do site.
 - **samples**: Real captured payloads used to design slim output shapes. Open this when revisiting field selection for LLM-oriented data.
