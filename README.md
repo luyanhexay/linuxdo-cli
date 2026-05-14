@@ -36,7 +36,7 @@ export PATH="$HOME/.local/bin:$PATH"
 ## Install directly from GitHub
 
 ```bash
-npm install -g --prefix "$HOME/.local" git+https://github.com/yourname/linuxdo-cli.git
+npm install -g --prefix "$HOME/.local" git+https://github.com/luyanhexay/linuxdo-cli.git
 ```
 
 ## Usage

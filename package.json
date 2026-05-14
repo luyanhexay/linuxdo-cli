@@ -27,10 +27,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourname/linuxdo-cli.git"
+    "url": "git+https://github.com/luyanhexay/linuxdo-cli.git"
   },
-  "homepage": "https://github.com/yourname/linuxdo-cli#readme",
+  "homepage": "https://github.com/luyanhexay/linuxdo-cli#readme",
   "bugs": {
-    "url": "https://github.com/yourname/linuxdo-cli/issues"
+    "url": "https://github.com/luyanhexay/linuxdo-cli/issues"
   }
 }
